@@ -831,6 +831,7 @@ class DownloadView(ctk.CTkFrame):
                 "pinterest": ("#E60023", "white"),
                 "other": ("#6B7280", "white")
             }
+            bg_col, txt_col = plat_colors.get(info.platform, ("#6B7280", "white"))
             plat_badge_texts = {
                 "shorts": "Shorts",
                 "youtube": "YouTube",
