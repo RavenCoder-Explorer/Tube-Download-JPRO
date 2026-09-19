@@ -327,7 +327,7 @@ def extract_pinterest_pin_data(url: str) -> Dict[str, Any]:
 
 
 def resolve_media_url(url: str) -> str:
-    """Expands redirect shortlinks (e.g. pin.it, youtu.be) into canonical URLs."""
+    """Expands redirect shortlinks (e.g. pin.it, youtu.be, vt.tiktok.com) into canonical URLs."""
     clean = url.strip()
     lower = clean.lower()
     if "pin.it/" in lower:
@@ -349,7 +349,101 @@ def resolve_media_url(url: str) -> str:
         if id_match:
             clean = f"https://www.pinterest.com/pin/{id_match.group(1)}/"
 
+    if "vt.tiktok.com/" in lower or "vm.tiktok.com/" in lower:
+        try:
+            resp = requests.head(clean, allow_redirects=True, timeout=8, headers={"User-Agent": "Mozilla/5.0"})
+            if resp.url and "tiktok.com" in resp.url.lower():
+                clean = resp.url
+        except Exception:
+            try:
+                resp = requests.get(clean, allow_redirects=True, timeout=8, stream=True, headers={"User-Agent": "Mozilla/5.0"})
+                if resp.url and "tiktok.com" in resp.url.lower():
+                    clean = resp.url
+            except Exception:
+                pass
+
     return clean
+
+
+def extract_tiktok_data(url: str) -> Dict[str, Any]:
+    """Extracts unwatermarked video stream, music, images, and metadata from TikTok URLs using TikWM API & oEmbed fallback."""
+    clean_url = resolve_media_url(url)
+    api_endpoints = [
+        "https://www.tikwm.com/api/",
+        "https://tikwm.com/api/"
+    ]
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+        "Referer": "https://www.tiktok.com/"
+    }
+
+    last_err = None
+    for api_url in api_endpoints:
+        try:
+            resp = requests.post(api_url, data={"url": clean_url, "hd": 1}, headers=headers, timeout=10)
+            if resp.status_code == 200:
+                data = resp.json()
+                if data.get("code") == 0 and "data" in data:
+                    d = data["data"]
+                    video_id = str(d.get("id") or "")
+                    title = (d.get("title") or "").strip()
+                    author_dict = d.get("author") or {}
+                    author = author_dict.get("nickname") or author_dict.get("unique_id") or "TikTok Creator"
+                    duration = int(d.get("duration") or 0)
+                    views = int(d.get("play_count") or 0)
+                    cover = d.get("cover") or d.get("origin_cover") or ""
+
+                    # Unwatermarked direct stream
+                    dl_url = d.get("hdplay") or d.get("play") or d.get("wmplay") or ""
+                    music_url = d.get("music") or ""
+                    images = d.get("images") or []
+                    is_image_slide = bool(images)
+
+                    if not dl_url and images:
+                        dl_url = images[0]
+
+                    if dl_url or images:
+                        return {
+                            "id": video_id,
+                            "title": title or f"TikTok Video {video_id}",
+                            "uploader": author,
+                            "duration": duration,
+                            "views": views,
+                            "thumbnail_url": cover,
+                            "download_url": dl_url,
+                            "music_url": music_url,
+                            "is_image": is_image_slide,
+                            "images": images,
+                            "size": d.get("size", 0)
+                        }
+        except Exception as e:
+            last_err = e
+            continue
+
+    # Secondary fallback: TikTok official oEmbed API for metadata
+    try:
+        oe_resp = requests.get(f"https://www.tiktok.com/oembed?url={clean_url}", headers=headers, timeout=6)
+        if oe_resp.status_code == 200:
+            oe = oe_resp.json()
+            return {
+                "id": oe.get("embed_product_id") or "",
+                "title": oe.get("title") or "TikTok Video",
+                "uploader": oe.get("author_name") or oe.get("author_unique_id") or "TikTok Creator",
+                "duration": 0,
+                "views": 0,
+                "thumbnail_url": oe.get("thumbnail_url") or "",
+                "download_url": "",
+                "music_url": "",
+                "is_image": False,
+                "images": [],
+                "size": 0
+            }
+    except Exception:
+        pass
+
+    if last_err:
+        raise last_err
+    raise RuntimeError("Could not retrieve TikTok video information.")
 
 
 def detect_platform(url: str) -> str:
@@ -556,6 +650,38 @@ def fetch_video_metadata(url: str) -> VideoInfo:
         except Exception as pe:
             print(f"Pinterest custom extractor warning: {pe}, trying yt-dlp...")
 
+    if platform == "tiktok":
+        try:
+            t_data = extract_tiktok_data(resolved_url)
+            is_img = t_data.get("is_image", False)
+            res_list = ["Original Photo (HD)"] if is_img else ["HD (No Watermark)", "Best Quality", "720p (HD)"]
+            dur = t_data.get("duration", 0)
+            views = t_data.get("views", 0)
+            return VideoInfo(
+                url=url,
+                id=t_data.get("id") or str(uuid.uuid4()),
+                title=t_data.get("title") or "TikTok Video",
+                uploader=t_data.get("uploader") or "TikTok Creator",
+                duration=dur,
+                duration_str=format_duration(dur) if not is_img else "Photo Slide",
+                view_count=views,
+                view_count_str=format_views(views) if views > 0 else "🎵 TikTok",
+                thumbnail_url=t_data.get("thumbnail_url", ""),
+                platform="tiktok",
+                available_resolutions=res_list,
+                raw_info={
+                    "tiktok_data": t_data,
+                    "direct_download_url": t_data.get("download_url", ""),
+                    "music_url": t_data.get("music_url", ""),
+                    "is_image": is_img,
+                    "images": t_data.get("images", []),
+                    "uploader": t_data.get("uploader", "TikTok Creator"),
+                    "ext": "jpg" if is_img else "mp4"
+                }
+            )
+        except Exception as te:
+            print(f"TikTok custom extractor notice: {te}, trying yt-dlp...")
+
     ydl_opts = {
         "quiet": True,
         "no_warnings": True,
@@ -570,67 +696,103 @@ def fetch_video_metadata(url: str) -> VideoInfo:
     if ffmpeg_path:
         ydl_opts["ffmpeg_location"] = ffmpeg_path
 
-    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-        info = ydl.extract_info(resolved_url, download=False)
-        if not info:
-            raise RuntimeError("Could not retrieve video information.")
+    info = None
+    try:
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(resolved_url, download=False)
+    except Exception as ydl_err:
+        if platform == "tiktok":
+            try:
+                t_data = extract_tiktok_data(resolved_url)
+                is_img = t_data.get("is_image", False)
+                res_list = ["Original Photo (HD)"] if is_img else ["HD (No Watermark)", "Best Quality", "720p (HD)"]
+                dur = t_data.get("duration", 0)
+                views = t_data.get("views", 0)
+                return VideoInfo(
+                    url=url,
+                    id=t_data.get("id") or str(uuid.uuid4()),
+                    title=t_data.get("title") or "TikTok Video",
+                    uploader=t_data.get("uploader") or "TikTok Creator",
+                    duration=dur,
+                    duration_str=format_duration(dur) if not is_img else "Photo Slide",
+                    view_count=views,
+                    view_count_str=format_views(views) if views > 0 else "🎵 TikTok",
+                    thumbnail_url=t_data.get("thumbnail_url", ""),
+                    platform="tiktok",
+                    available_resolutions=res_list,
+                    raw_info={
+                        "tiktok_data": t_data,
+                        "direct_download_url": t_data.get("download_url", ""),
+                        "music_url": t_data.get("music_url", ""),
+                        "is_image": is_img,
+                        "images": t_data.get("images", []),
+                        "uploader": t_data.get("uploader", "TikTok Creator"),
+                        "ext": "jpg" if is_img else "mp4"
+                    }
+                )
+            except Exception:
+                pass
+        raise ydl_err
 
-        # If playlist/entries, grab first entry
-        if "entries" in info and info["entries"]:
-            info = info["entries"][0]
+    if not info:
+        raise RuntimeError("Could not retrieve video information.")
 
-        title = info.get("title") or info.get("description") or "Pinterest Pin"
-        if len(title) > 90:
-            title = title[:87] + "..."
-        uploader = info.get("uploader") or info.get("creator") or info.get("channel") or info.get("uploader_id") or "Pinterest Creator"
-        duration = info.get("duration", 0) or 0
-        views = info.get("view_count", 0) or 0
-        thumbnail = info.get("thumbnail", "")
+    # If playlist/entries, grab first entry
+    if "entries" in info and info["entries"]:
+        info = info["entries"][0]
 
-        # Find available heights/resolutions
-        formats = info.get("formats", [])
-        heights = set()
-        for f in formats:
-            h = f.get("height")
-            if h and isinstance(h, int) and h > 0:
-                heights.add(h)
+    title = info.get("title") or info.get("description") or get_platform_label(platform)
+    if len(title) > 90:
+        title = title[:87] + "..."
+    uploader = info.get("uploader") or info.get("creator") or info.get("channel") or info.get("uploader_id") or get_platform_label(platform)
+    duration = info.get("duration", 0) or 0
+    views = info.get("view_count", 0) or 0
+    thumbnail = info.get("thumbnail", "")
 
-        sorted_heights = sorted(list(heights), reverse=True)
-        res_list = ["Best Quality"]
-        for h in sorted_heights:
-            if h >= 2160:
-                res_list.append(f"{h}p (4K)")
-            elif h >= 1440:
-                res_list.append(f"{h}p (2K)")
-            elif h >= 1080:
-                res_list.append(f"{h}p (Full HD)")
-            elif h >= 720:
-                res_list.append(f"{h}p (HD)")
-            else:
-                res_list.append(f"{h}p")
+    # Find available heights/resolutions
+    formats = info.get("formats", [])
+    heights = set()
+    for f in formats:
+        h = f.get("height")
+        if h and isinstance(h, int) and h > 0:
+            heights.add(h)
 
-        # Deduplicate while preserving order
-        seen = set()
-        dedup_res = []
-        for r in res_list:
-            if r not in seen:
-                seen.add(r)
-                dedup_res.append(r)
+    sorted_heights = sorted(list(heights), reverse=True)
+    res_list = ["Best Quality"]
+    for h in sorted_heights:
+        if h >= 2160:
+            res_list.append(f"{h}p (4K)")
+        elif h >= 1440:
+            res_list.append(f"{h}p (2K)")
+        elif h >= 1080:
+            res_list.append(f"{h}p (Full HD)")
+        elif h >= 720:
+            res_list.append(f"{h}p (HD)")
+        else:
+            res_list.append(f"{h}p")
 
-        return VideoInfo(
-            url=url,
-            id=info.get("id", str(uuid.uuid4())),
-            title=title,
-            uploader=uploader,
-            duration=duration,
-            duration_str=format_duration(duration),
-            view_count=views,
-            view_count_str=format_views(views),
-            thumbnail_url=thumbnail,
-            platform=platform,
-            available_resolutions=dedup_res if len(dedup_res) > 1 else ["Best Quality", "1080p", "720p", "480p"],
-            raw_info=info
-        )
+    # Deduplicate while preserving order
+    seen = set()
+    dedup_res = []
+    for r in res_list:
+        if r not in seen:
+            seen.add(r)
+            dedup_res.append(r)
+
+    return VideoInfo(
+        url=url,
+        id=info.get("id", str(uuid.uuid4())),
+        title=title,
+        uploader=uploader,
+        duration=duration,
+        duration_str=format_duration(duration),
+        view_count=views,
+        view_count_str=format_views(views),
+        thumbnail_url=thumbnail,
+        platform=platform,
+        available_resolutions=dedup_res if len(dedup_res) > 1 else ["Best Quality", "1080p", "720p", "480p"],
+        raw_info=info
+    )
 
 
 NAMING_TEMPLATES: Dict[str, str] = {
@@ -1088,6 +1250,11 @@ class DownloadManager:
                 self._run_pinterest_download(task)
                 return
 
+            # High-speed direct streaming for TikTok (No-Watermark MP4, MP3 Audio, and Photo Slides)
+            if task.platform == "tiktok":
+                self._run_tiktok_download(task)
+                return
+
             ydl_opts = self._build_ydl_options(task)
 
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -1150,9 +1317,229 @@ class DownloadManager:
             task.status = "cancelled"
             task.error_message = "Cancelled"
         except Exception as e:
+            # Fallback to direct streaming if TikTok failed inside yt-dlp
+            if task.platform == "tiktok" and not getattr(task, "_tried_tiktok_fallback", False):
+                task._tried_tiktok_fallback = True
+                try:
+                    self._run_tiktok_download(task)
+                    return
+                except Exception:
+                    pass
             task.status = "error"
             task.error_message = str(e)
             print(f"Download task error: {e}")
+        finally:
+            with self.lock:
+                self.active_count = max(0, self.active_count - 1)
+            self._notify(task)
+            self._process_queue()
+
+    def _run_tiktok_download(self, task: DownloadTask) -> None:
+        """High-speed direct streaming download worker for TikTok (No-Watermark MP4, MP3 Audio, and Photos)."""
+        try:
+            direct_url = ""
+            music_url = ""
+            creator = "TikTok Creator"
+            is_image = False
+            images = []
+
+            if task.extra_info and task.extra_info.get("direct_download_url"):
+                direct_url = task.extra_info["direct_download_url"]
+                music_url = task.extra_info.get("music_url", "")
+                creator = task.extra_info.get("uploader") or "TikTok Creator"
+                is_image = task.extra_info.get("is_image", False)
+                images = task.extra_info.get("images", [])
+                if not task.thumbnail_url and task.extra_info.get("thumbnail_url"):
+                    task.thumbnail_url = task.extra_info["thumbnail_url"]
+            else:
+                t_data = extract_tiktok_data(task.url)
+                direct_url = t_data.get("download_url", "")
+                music_url = t_data.get("music_url", "")
+                creator = t_data.get("uploader") or "TikTok Creator"
+                is_image = t_data.get("is_image", False)
+                images = t_data.get("images", [])
+                if not task.title or task.title in ["", "Loading metadata...", "Untitled Video"]:
+                    task.title = t_data.get("title", task.title)
+                if not task.thumbnail_url:
+                    task.thumbnail_url = t_data.get("thumbnail_url", "")
+
+            # If photo slideshow or image mode requested
+            if is_image or task.mode == "image":
+                if images:
+                    task.thumbnail_url = images[0]
+                self._run_image_download(task)
+                return
+
+            target_dir = task.save_dir or config.download_dir
+            sub_mode = task.subfolder_rule or config.get("organize_subfolders", "None")
+            if sub_mode == "By Platform":
+                target_dir = os.path.join(target_dir, "TikTok")
+            elif sub_mode == "By Creator" and creator:
+                target_dir = os.path.join(target_dir, sanitize_filename(creator))
+            elif sub_mode == "By Platform & Creator":
+                target_dir = os.path.join(target_dir, "TikTok", sanitize_filename(creator))
+            os.makedirs(target_dir, exist_ok=True)
+
+            is_audio_mode = (task.mode == "audio")
+
+            # Determine stream URL and formats
+            stream_url = ""
+            raw_ext = "mp4"
+            if is_audio_mode and music_url and task.audio_format.lower() == "mp3":
+                stream_url = music_url
+                raw_ext = "mp3"
+            elif direct_url:
+                stream_url = direct_url
+                raw_ext = "mp4"
+            elif music_url:
+                stream_url = music_url
+                raw_ext = "mp3"
+            else:
+                raise RuntimeError("Could not find direct download stream for TikTok.")
+
+            clean_t = sanitize_filename(task.title)[:60].strip() or f"TikTok_{task.task_id[:8]}"
+            out_ext = task.audio_format.lower() if is_audio_mode else "mp4"
+            out_filename = f"{clean_t}.{out_ext}"
+            out_filepath = os.path.join(target_dir, out_filename)
+
+            counter = 1
+            while os.path.exists(out_filepath):
+                out_filepath = os.path.join(target_dir, f"{clean_t}_{counter}.{out_ext}")
+                counter += 1
+
+            task.target_filepath = out_filepath
+
+            needs_ffmpeg_audio = is_audio_mode and (raw_ext != out_ext or stream_url == direct_url)
+            temp_stream_path = out_filepath if not needs_ffmpeg_audio else os.path.join(target_dir, f"temp_stream_{task.task_id[:8]}.{raw_ext}")
+
+            headers = {
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+                "Referer": "https://www.tiktok.com/"
+            }
+            r_stream = requests.get(stream_url, stream=True, timeout=25, headers=headers)
+            r_stream.raise_for_status()
+
+            total_bytes = int(r_stream.headers.get("content-length", 0))
+            task.total_bytes = total_bytes
+            downloaded = 0
+            start_time = time.time()
+            last_notify = start_time
+
+            with open(temp_stream_path, "wb") as f:
+                for chunk in r_stream.iter_content(chunk_size=65536):
+                    if task.cancel_requested:
+                        raise yt_dlp.utils.DownloadCancelled("Download cancelled by user.")
+                    if chunk:
+                        f.write(chunk)
+                        downloaded += len(chunk)
+                        task.downloaded_bytes = downloaded
+
+                        now = time.time()
+                        if now - last_notify >= 0.25:
+                            last_notify = now
+                            elapsed = max(0.01, now - start_time)
+                            speed = downloaded / elapsed
+                            task.speed_str = f"{format_bytes(speed)}/s"
+                            if total_bytes > 0:
+                                task.progress = min(98.0, (downloaded / total_bytes) * 100.0)
+                                task.size_str = f"{format_bytes(downloaded)} / {format_bytes(total_bytes)}"
+                                rem_bytes = max(0, total_bytes - downloaded)
+                                eta = rem_bytes / max(1, speed)
+                                task.eta_str = format_duration(int(eta))
+                            else:
+                                task.size_str = format_bytes(downloaded)
+                            self._notify(task)
+
+            # Audio extraction/transcoding if requested
+            if needs_ffmpeg_audio and os.path.exists(temp_stream_path):
+                task.status = "merging"
+                task.speed_str = "Extracting audio..."
+                self._notify(task)
+                ffmpeg_bin = get_ffmpeg_path() or shutil.which("ffmpeg")
+                if ffmpeg_bin:
+                    import subprocess
+                    bitrate = task.audio_bitrate if "k" in task.audio_bitrate else f"{task.audio_bitrate}k"
+                    cmd = [ffmpeg_bin, "-y", "-i", temp_stream_path, "-vn", "-b:a", bitrate, out_filepath]
+                    subprocess.run(cmd, capture_output=True, check=True)
+                    try:
+                        os.remove(temp_stream_path)
+                    except Exception:
+                        pass
+                else:
+                    if os.path.exists(out_filepath):
+                        os.remove(out_filepath)
+                    os.rename(temp_stream_path, out_filepath)
+
+            # Video Trimming if specified
+            if task.time_range and not is_audio_mode:
+                start_t, end_t = task.time_range
+                if (start_t and start_t != "00:00") or end_t:
+                    ffmpeg_bin = get_ffmpeg_path() or shutil.which("ffmpeg")
+                    if ffmpeg_bin and os.path.exists(out_filepath):
+                        trimmed_p = os.path.splitext(out_filepath)[0] + "_trimmed.mp4"
+                        trim_cmd = [ffmpeg_bin, "-y"]
+                        if start_t:
+                            trim_cmd.extend(["-ss", start_t])
+                        trim_cmd.extend(["-i", out_filepath])
+                        if end_t:
+                            trim_cmd.extend(["-to", end_t])
+                        trim_cmd.extend(["-c", "copy", trimmed_p])
+                        try:
+                            import subprocess
+                            t_res = subprocess.run(trim_cmd, capture_output=True)
+                            if t_res.returncode == 0 and os.path.exists(trimmed_p):
+                                os.remove(out_filepath)
+                                os.rename(trimmed_p, out_filepath)
+                        except Exception as tr_err:
+                            print(f"Trimming error on TikTok video: {tr_err}")
+
+            # Auto-save cover thumbnail if requested in settings
+            if config.get("auto_save_thumbnail", False) and task.thumbnail_url:
+                try:
+                    thumb_p = os.path.splitext(out_filepath)[0] + ".jpg"
+                    if not os.path.exists(thumb_p):
+                        tr = requests.get(task.thumbnail_url, timeout=10, headers=headers)
+                        if tr.status_code == 200:
+                            with open(thumb_p, "wb") as tf:
+                                tf.write(tr.content)
+                except Exception as te:
+                    print(f"Failed to auto-save TikTok thumbnail: {te}")
+
+            task.status = "completed"
+            task.progress = 100.0
+            task.speed_str = "Done"
+            task.eta_str = "00:00"
+            actual_size = os.path.getsize(out_filepath) if os.path.exists(out_filepath) else downloaded
+            task.downloaded_bytes = actual_size
+            task.size_str = format_bytes(actual_size)
+
+            config.add_history({
+                "id": task.task_id,
+                "title": task.title,
+                "url": task.url,
+                "platform": "tiktok",
+                "filepath": task.target_filepath,
+                "mode": "audio" if is_audio_mode else "video",
+                "resolution": task.audio_format.upper() if is_audio_mode else "HD (No Watermark)",
+                "filesize": format_bytes(actual_size),
+                "timestamp": time.strftime("%Y-%m-%d %H:%M"),
+                "status": "completed"
+            })
+
+            if config.get("completion_sound", True):
+                try:
+                    import winsound
+                    winsound.MessageBeep(winsound.MB_ICONASTERISK)
+                except Exception:
+                    pass
+
+        except yt_dlp.utils.DownloadCancelled:
+            task.status = "cancelled"
+            task.error_message = "Cancelled"
+        except Exception as e:
+            task.status = "error"
+            task.error_message = str(e)
+            print(f"TikTok direct download error: {e}")
         finally:
             with self.lock:
                 self.active_count = max(0, self.active_count - 1)

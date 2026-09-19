@@ -845,6 +845,9 @@ class DownloadView(ctk.CTkFrame):
                 if "Image" in top_res or (info.raw_info and info.raw_info.get("is_image")):
                     res_text = "IMAGE HD"
                     res_color = ("#E60023", "#DC2626")
+                elif "Watermark" in top_res or "NO WM" in top_res:
+                    res_text = "HD NO WM"
+                    res_color = ("#059669", "#10B981")
                 elif "4K" in top_res or "2160" in top_res:
                     res_text = "4K UHD"
                     res_color = ("#7C3AED", "#6D28D9")
