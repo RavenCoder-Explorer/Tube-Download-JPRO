@@ -42,6 +42,13 @@ def get_ffmpeg_path() -> Optional[str]:
             exe_dir / "bin" / FFMPEG_EXE_NAME,
             exe_dir / "_internal" / "bin" / FFMPEG_EXE_NAME,
             exe_dir / FFMPEG_EXE_NAME,
+            exe_dir.parent / "bin" / FFMPEG_EXE_NAME,
+        ])
+    if hasattr(sys, "_MEIPASS"):
+        meipass = Path(sys._MEIPASS)
+        candidates.extend([
+            meipass / "bin" / FFMPEG_EXE_NAME,
+            meipass / FFMPEG_EXE_NAME,
         ])
 
     for c in candidates:

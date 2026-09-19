@@ -1244,11 +1244,18 @@ class DownloadManager:
                     )
                 ydl_opts["merge_output_format"] = "mp4"
             else:
-                # Fallback without ffmpeg
+                # Robust fallback if ffmpeg is somehow not detected
                 if target_dim:
-                    ydl_opts["format"] = f"best[height<={target_dim}]/best[width<={target_dim}]/best"
+                    ydl_opts["format"] = (
+                        f"bestvideo[height<={target_dim}]+bestaudio/"
+                        f"bestvideo[width<={target_dim}]+bestaudio/"
+                        f"best[height<={target_dim}]/"
+                        f"best[width<={target_dim}]/"
+                        f"bestvideo+bestaudio/"
+                        f"best"
+                    )
                 else:
-                    ydl_opts["format"] = "best"
+                    ydl_opts["format"] = "bestvideo+bestaudio/best[ext=mp4]/best"
 
             # Subtitle burn-in if requested and ffmpeg is present
             if sub_mode == "Burn into Video" and has_ffmpeg:
