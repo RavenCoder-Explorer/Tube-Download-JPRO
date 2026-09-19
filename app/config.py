@@ -25,7 +25,7 @@ class ConfigManager:
             "color_theme": "blue",
             "auto_paste": True,
             "max_concurrent": 3,
-            "preferred_video_res": "1080p",
+            "preferred_video_res": "720p",
             "preferred_audio_format": "mp3",
             "preferred_audio_bitrate": "320k",
             "preferred_mode": "video",  # "video" or "audio"
