@@ -79,11 +79,23 @@ class ConfigManager:
     def download_dir(self, path: str) -> None:
         self.set("download_dir", path)
 
+    def _clean_history_title(self, raw_title: Any) -> str:
+        if not raw_title:
+            return "Untitled Video"
+        clean = " ".join(str(raw_title).split()).strip()
+        if len(clean) > 85:
+            clean = clean[:82].strip() + "..."
+        return clean or "Untitled Video"
+
     def _load_history(self) -> List[Dict[str, Any]]:
         if HISTORY_FILE.exists():
             try:
                 with open(HISTORY_FILE, "r", encoding="utf-8") as f:
-                    return json.load(f)
+                    items = json.load(f)
+                    for item in items:
+                        if item.get("title"):
+                            item["title"] = self._clean_history_title(item["title"])
+                    return items
             except Exception as e:
                 print(f"Error loading history: {e}")
         return []
@@ -97,6 +109,8 @@ class ConfigManager:
 
     def add_history(self, item: Dict[str, Any]) -> None:
         # Prepend so newest is first
+        if item.get("title"):
+            item["title"] = self._clean_history_title(item["title"])
         self.history.insert(0, item)
         self.save_history()
 

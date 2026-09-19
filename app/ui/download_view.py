@@ -817,7 +817,10 @@ class DownloadView(ctk.CTkFrame):
             ready_msg = "✔ Video ready for download!" if is_pro_active() else "✔ Video ready for download! (Free Edition capped at 720p HD)"
             self.status_label.configure(text=ready_msg, text_color="#10B981")
 
-            self.video_title_label.configure(text=info.title)
+            clean_t = " ".join(str(info.title).split()).strip()
+            if len(clean_t) > 95:
+                clean_t = clean_t[:92].strip() + "..."
+            self.video_title_label.configure(text=clean_t)
             self.uploader_label.configure(text=f"By {info.uploader}")
             self.duration_badge.configure(text=f"⏱ {info.duration_str}")
             self.views_badge.configure(text=f"👁 {info.view_count_str}")

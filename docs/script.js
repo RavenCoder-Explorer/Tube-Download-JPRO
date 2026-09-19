@@ -58,13 +58,24 @@ document.addEventListener('DOMContentLoaded', () => {
       `
     },
     terms: {
-      title: 'Terms of Service',
+      title: 'Terms of Service & Legal Compliance',
       content: `
-        <p>By downloading or purchasing Tube Download JPRO, you agree to the following terms:</p>
-        <h4>License Grant:</h4>
-        <p>A Pro license grants non-transferable access for use on 1 active Windows device. Lifetime licenses include permanent usage and ongoing core engine updates.</p>
-        <h4>Fair Use & Compliance:</h4>
-        <p>Tube Download JPRO is a media utility tool. Users are strictly responsible for complying with the terms of service of third-party platforms and respecting copyright laws in their respective jurisdictions. You may only download content that you own or have explicit permission to archive.</p>
+        <p>By downloading, installing, or purchasing Tube Download JPRO, you agree to the following terms and conditions:</p>
+        <h4>1. Purpose &amp; Fair Use:</h4>
+        <p>Tube Download JPRO is a media productivity and archival utility intended for personal backup, offline study, and creator editing workflows. Users are strictly responsible for complying with the terms of service of third-party platforms and respecting copyright laws in their respective jurisdictions. You may only download content that you own, have explicit creator permission to archive, or that is licensed under Creative Commons or public domain.</p>
+        <h4>2. Commercial License Grant:</h4>
+        <p>A Pro commercial license grants non-transferable access for use on 1 active Windows device. Lifetime licenses include permanent usage and ongoing core engine updates on the activated device. In the event of a computer change or hardware upgrade, users may contact support to rebind their activation.</p>
+        <h4>3. Open-Source Attributions:</h4>
+        <p>Tube Download JPRO incorporates open-source multimedia components in strict compliance with their licenses:</p>
+        <ul>
+          <li><strong>FFmpeg:</strong> Licensed under the GNU Lesser General Public License (LGPL) version 2.1 or later. FFmpeg is an open-source trademark of Fabrice Bellard. Source code and documentation are available at <a href="https://ffmpeg.org" target="_blank" style="color:#00F2FE;">ffmpeg.org</a>.</li>
+          <li><strong>yt-dlp:</strong> Distributed under the Unlicense (Public Domain dedication). Source code and documentation are available at <a href="https://github.com/yt-dlp/yt-dlp" target="_blank" style="color:#00F2FE;">github.com/yt-dlp/yt-dlp</a>.</li>
+          <li><strong>CustomTkinter:</strong> Licensed under the MIT License by Tom Schimansky.</li>
+        </ul>
+        <h4>4. DMCA &amp; Intellectual Property Notice:</h4>
+        <p>We respect intellectual property rights. If you believe your copyrighted work is being infringed or if you are a copyright holder seeking inquiries, please contact our designated support address at <a href="mailto:jprosoftware.support@gmail.com" style="color:#00F2FE;">jprosoftware.support@gmail.com</a>. We will respond promptly to valid notices.</p>
+        <h4>5. Disclaimer of Warranties:</h4>
+        <p>The software is provided "AS IS", without warranty of any kind, express or implied. Under no circumstances shall the software developers be liable for any direct, indirect, incidental, or consequential damages resulting from the use or inability to use this utility.</p>
       `
     },
     privacy: {

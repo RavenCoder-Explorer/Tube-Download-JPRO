@@ -160,6 +160,16 @@ def sanitize_filename(name: str) -> str:
     return re.sub(r'[\\/*?:"<>|]', "", name).strip()
 
 
+def clean_media_title(name: str, max_length: int = 90) -> str:
+    """Sanitizes titles/captions by stripping newlines, collapsing whitespace, and truncating runaway descriptions."""
+    if not name:
+        return "Untitled Media"
+    cleaned = " ".join(str(name).split()).strip()
+    if len(cleaned) > max_length:
+        cleaned = cleaned[:max_length - 3].strip() + "..."
+    return cleaned or "Untitled Media"
+
+
 _pinterest_session: Optional[requests.Session] = None
 
 def get_pinterest_session() -> requests.Session:
@@ -405,7 +415,7 @@ def extract_tiktok_data(url: str) -> Dict[str, Any]:
                     if dl_url or images:
                         return {
                             "id": video_id,
-                            "title": title or f"TikTok Video {video_id}",
+                            "title": clean_media_title(title, 85) or f"TikTok Video {video_id}",
                             "uploader": author,
                             "duration": duration,
                             "views": views,
@@ -427,7 +437,7 @@ def extract_tiktok_data(url: str) -> Dict[str, Any]:
             oe = oe_resp.json()
             return {
                 "id": oe.get("embed_product_id") or "",
-                "title": oe.get("title") or "TikTok Video",
+                "title": clean_media_title(oe.get("title") or "TikTok Video", 85),
                 "uploader": oe.get("author_name") or oe.get("author_unique_id") or "TikTok Creator",
                 "duration": 0,
                 "views": 0,
@@ -1323,7 +1333,7 @@ class DownloadManager:
                     ):
                         task.target_filepath = h["filepath"]
                         if h.get("title") and task.title in ["", "Loading metadata..."]:
-                            task.title = h["title"]
+                            task.title = clean_media_title(h["title"], 85)
                         task.status = "completed"
                         task.progress = 100.0
                         task.speed_str = "Skipped (Exists)"
@@ -1360,7 +1370,7 @@ class DownloadManager:
                 if res_info:
                     # Update real title if we only had placeholder
                     if "title" in res_info and res_info["title"]:
-                        task.title = res_info["title"]
+                        task.title = clean_media_title(res_info["title"], 85)
 
                     requested_downloads = res_info.get("requested_downloads")
                     if requested_downloads and len(requested_downloads) > 0:
@@ -1392,7 +1402,7 @@ class DownloadManager:
 
                 config.add_history({
                     "id": task.task_id,
-                    "title": task.title,
+                    "title": clean_media_title(task.title, 85),
                     "url": task.url,
                     "platform": task.platform,
                     "filepath": task.target_filepath,
@@ -1457,7 +1467,9 @@ class DownloadManager:
                 is_image = t_data.get("is_image", False)
                 images = t_data.get("images", [])
                 if not task.title or task.title in ["", "Loading metadata...", "Untitled Video"]:
-                    task.title = t_data.get("title", task.title)
+                    task.title = clean_media_title(t_data.get("title", task.title), 85)
+                else:
+                    task.title = clean_media_title(task.title, 85)
                 if not task.thumbnail_url:
                     task.thumbnail_url = t_data.get("thumbnail_url", "")
 
@@ -1622,7 +1634,7 @@ class DownloadManager:
 
             config.add_history({
                 "id": task.task_id,
-                "title": task.title,
+                "title": clean_media_title(task.title, 85),
                 "url": task.url,
                 "platform": "tiktok",
                 "filepath": task.target_filepath,
@@ -1671,7 +1683,7 @@ class DownloadManager:
                 ext = p_data["ext"]
                 creator = p_data.get("uploader") or "Pinterest"
                 if not task.title or task.title == "Loading metadata...":
-                    task.title = p_data["title"]
+                    task.title = clean_media_title(p_data.get("title", task.title), 85)
                 if not task.thumbnail_url:
                     task.thumbnail_url = p_data["image_url"]
 
@@ -1801,7 +1813,7 @@ class DownloadManager:
 
             config.add_history({
                 "id": task.task_id,
-                "title": task.title,
+                "title": clean_media_title(task.title, 85),
                 "url": task.url,
                 "platform": "pinterest",
                 "filepath": task.target_filepath,
@@ -1846,7 +1858,7 @@ class DownloadManager:
                 info = fetch_video_metadata(task.url)
                 img_url = info.thumbnail_url
                 if not task.title or task.title == "Loading metadata...":
-                    task.title = info.title
+                    task.title = clean_media_title(info.title, 85)
 
             if not img_url:
                 raise RuntimeError("Could not find thumbnail or image URL for this media.")
@@ -1907,7 +1919,7 @@ class DownloadManager:
 
             config.add_history({
                 "id": task.task_id,
-                "title": task.title,
+                "title": clean_media_title(task.title, 85),
                 "url": task.url,
                 "platform": task.platform,
                 "filepath": task.target_filepath,

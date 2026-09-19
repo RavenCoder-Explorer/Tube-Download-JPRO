@@ -38,12 +38,17 @@ class ActiveTaskCard(ctk.CTkFrame):
         top_row = ctk.CTkFrame(self, fg_color="transparent")
         top_row.pack(fill="x", padx=14, pady=(10, 4))
 
+        raw_title = str(self.task.title or "Downloading...").strip()
+        clean_title = " ".join(raw_title.split())
+        if len(clean_title) > 85:
+            clean_title = clean_title[:82].strip() + "..."
+
         self.title_label = ctk.CTkLabel(
             top_row,
-            text=self.task.title,
+            text=clean_title,
             font=ctk.CTkFont(size=13, weight="bold"),
             anchor="w",
-            wraplength=480,
+            wraplength=520,
             justify="left"
         )
         self.title_label.pack(side="left", fill="x", expand=True)
@@ -134,7 +139,10 @@ class ActiveTaskCard(ctk.CTkFrame):
         self.stats_label.configure(text=f"{task.speed_str} • ETA: {task.eta_str} • {task.size_str}")
 
         if task.title and task.title != "Loading metadata...":
-            self.title_label.configure(text=task.title)
+            clean_t = " ".join(str(task.title).split())
+            if len(clean_t) > 85:
+                clean_t = clean_t[:82].strip() + "..."
+            self.title_label.configure(text=clean_t)
 
         if task.status == "downloading":
             self.status_badge.configure(text="Downloading", fg_color=("#2563EB", "#1D4ED8"), text_color="white")
@@ -219,13 +227,17 @@ class HistoryItemCard(ctk.CTkFrame):
         info_col = ctk.CTkFrame(inner, fg_color="transparent")
         info_col.pack(side="left", fill="x", expand=True)
 
-        title = self.data.get("title", "Unknown Video")
+        raw_title = str(self.data.get("title", "Unknown Video")).strip()
+        clean_title = " ".join(raw_title.split())
+        if len(clean_title) > 85:
+            clean_title = clean_title[:82].strip() + "..."
+
         title_lbl = ctk.CTkLabel(
             info_col,
-            text=title,
+            text=clean_title,
             font=ctk.CTkFont(size=13, weight="bold"),
             anchor="w",
-            wraplength=460,
+            wraplength=520,
             justify="left"
         )
         title_lbl.pack(fill="x", pady=(0, 4))

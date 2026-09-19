@@ -91,7 +91,8 @@ class BatchItemRow(ctk.CTkFrame):
         plat_badge.grid(row=0, column=1, sticky="w", padx=(4, 10))
 
         # URL / Title text
-        display_text = self.title if self.title else self.url
+        raw_text = self.title if self.title else self.url
+        display_text = " ".join(str(raw_text).split()).strip()
         if len(display_text) > 55:
             display_text = display_text[:52] + "..."
 
@@ -190,7 +191,7 @@ class BatchItemRow(ctk.CTkFrame):
         self.pbar.set(min(1.0, max(0.0, pct)))
 
         if task.title and task.title != "Loading metadata...":
-            dt = task.title
+            dt = " ".join(str(task.title).split()).strip()
             if len(dt) > 55:
                 dt = dt[:52] + "..."
             self.text_label.configure(text=dt)
