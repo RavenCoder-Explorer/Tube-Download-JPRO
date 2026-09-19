@@ -21,6 +21,8 @@ bin/
 downloads/
 scratch/
 *.log
+licenses_issued.txt
+licenses_issued.csv
 
 # IDE & Editor Settings
 .vscode/
