@@ -695,6 +695,7 @@ class DownloadTask:
     error_message: str = ""
     target_filepath: str = ""
     cancel_requested: bool = False
+    image_format: str = "original"
     extra_info: Dict[str, Any] = field(default_factory=dict)
 
 
@@ -737,6 +738,7 @@ class DownloadManager:
         speed_limit: Optional[str] = None,
         subfolder_rule: Optional[str] = None,
         skip_existing: Optional[bool] = None,
+        image_format: Optional[str] = None,
         extra_info: Optional[Dict[str, Any]] = None
     ) -> DownloadTask:
         save_directory = save_dir or config.download_dir
@@ -748,6 +750,7 @@ class DownloadManager:
         s_limit = speed_limit or config.get("speed_limit", "Unlimited")
         s_rule = subfolder_rule or config.get("organize_subfolders", "None")
         s_skip = skip_existing if skip_existing is not None else config.get("skip_existing_files", True)
+        img_fmt = (image_format or config.get("image_format", "original")).lower()
 
         # Deep Security Gating: Enforce Pro restrictions at the engine level
         if not verify_runtime_integrity():
@@ -766,6 +769,7 @@ class DownloadManager:
             resolution=resolution,
             audio_format=audio_format,
             audio_bitrate=audio_bitrate,
+            image_format=img_fmt,
             save_dir=save_directory,
             naming_template=template,
             order_num=order_num,
@@ -908,6 +912,10 @@ class DownloadManager:
         if task.skip_existing:
             ydl_opts["nooverwrites"] = True
             ydl_opts["continue_dl"] = True
+
+        # Auto-save video thumbnail alongside video file if enabled in Settings
+        if config.get("auto_save_thumbnail", False) and task.mode == "video":
+            ydl_opts["writethumbnail"] = True
 
         # Speed Limiter
         s_limit = task.speed_limit or config.get("speed_limit", "Unlimited")
@@ -1070,6 +1078,11 @@ class DownloadManager:
             task.status = "downloading"
             self._notify(task)
 
+            # Direct image mode (e.g. cover photo / thumbnail download for any platform)
+            if task.mode == "image" and task.platform != "pinterest":
+                self._run_image_download(task)
+                return
+
             # High-speed direct streaming for Pinterest (Videos and HD Images)
             if task.platform == "pinterest":
                 self._run_pinterest_download(task)
@@ -1226,12 +1239,62 @@ class DownloadManager:
                                 task.size_str = format_bytes(downloaded)
                             self._notify(task)
 
+            # Apply image format conversion if user specified a desired format
+            if ext in ("jpg", "jpeg", "png", "webp"):
+                desired_fmt = (task.image_format or config.get("image_format", "original")).lower()
+                if desired_fmt in ["jpg", "jpeg"] and ext not in ["jpg", "jpeg"]:
+                    try:
+                        from PIL import Image
+                        with Image.open(out_filepath) as pil_img:
+                            new_p = os.path.splitext(out_filepath)[0] + ".jpg"
+                            pil_img.convert("RGB").save(new_p, "JPEG", quality=95)
+                        try:
+                            os.remove(out_filepath)
+                        except Exception:
+                            pass
+                        out_filepath = new_p
+                        ext = "jpg"
+                        task.target_filepath = out_filepath
+                    except Exception as conv_err:
+                        print(f"Failed to convert image to JPG: {conv_err}")
+                elif desired_fmt == "png" and ext != "png":
+                    try:
+                        from PIL import Image
+                        with Image.open(out_filepath) as pil_img:
+                            new_p = os.path.splitext(out_filepath)[0] + ".png"
+                            pil_img.save(new_p, "PNG")
+                        try:
+                            os.remove(out_filepath)
+                        except Exception:
+                            pass
+                        out_filepath = new_p
+                        ext = "png"
+                        task.target_filepath = out_filepath
+                    except Exception as conv_err:
+                        print(f"Failed to convert image to PNG: {conv_err}")
+                elif desired_fmt == "webp" and ext != "webp":
+                    try:
+                        from PIL import Image
+                        with Image.open(out_filepath) as pil_img:
+                            new_p = os.path.splitext(out_filepath)[0] + ".webp"
+                            pil_img.save(new_p, "WEBP", quality=95)
+                        try:
+                            os.remove(out_filepath)
+                        except Exception:
+                            pass
+                        out_filepath = new_p
+                        ext = "webp"
+                        task.target_filepath = out_filepath
+                    except Exception as conv_err:
+                        print(f"Failed to convert image to WebP: {conv_err}")
+
             task.status = "completed"
             task.progress = 100.0
             task.speed_str = "Done"
             task.eta_str = "00:00"
-            task.downloaded_bytes = downloaded
-            task.size_str = format_bytes(downloaded)
+            actual_size = os.path.getsize(out_filepath) if os.path.exists(out_filepath) else downloaded
+            task.downloaded_bytes = actual_size
+            task.size_str = format_bytes(actual_size)
 
             config.add_history({
                 "id": task.task_id,
@@ -1240,8 +1303,8 @@ class DownloadManager:
                 "platform": "pinterest",
                 "filepath": task.target_filepath,
                 "mode": "image" if ext in ("jpg", "jpeg", "png", "webp") else "video",
-                "resolution": "Original Image (HD)" if ext in ("jpg", "jpeg", "png", "webp") else "Video HD",
-                "filesize": format_bytes(downloaded),
+                "resolution": f"Photo ({ext.upper()})" if ext in ("jpg", "jpeg", "png", "webp") else "Video HD",
+                "filesize": format_bytes(actual_size),
                 "timestamp": time.strftime("%Y-%m-%d %H:%M"),
                 "status": "completed"
             })
@@ -1260,6 +1323,97 @@ class DownloadManager:
             task.status = "error"
             task.error_message = str(e)
             print(f"Pinterest direct download error: {e}")
+        finally:
+            with self.lock:
+                self.active_count = max(0, self.active_count - 1)
+            self._notify(task)
+            self._process_queue()
+
+    def _run_image_download(self, task: DownloadTask) -> None:
+        """Downloads high-res cover photo/thumbnail for video or image URLs."""
+        try:
+            target_dir = task.save_dir or config.download_dir
+            sub_mode = task.subfolder_rule or config.get("organize_subfolders", "None")
+            if sub_mode in ["By Platform", "By Platform & Creator"]:
+                target_dir = os.path.join(target_dir, get_platform_label(task.platform))
+            os.makedirs(target_dir, exist_ok=True)
+
+            img_url = task.thumbnail_url
+            if not img_url:
+                info = fetch_video_metadata(task.url)
+                img_url = info.thumbnail_url
+                if not task.title or task.title == "Loading metadata...":
+                    task.title = info.title
+
+            if not img_url:
+                raise RuntimeError("Could not find thumbnail or image URL for this media.")
+
+            clean_t = sanitize_filename(task.title)[:60].strip() or f"Cover_{task.task_id[:8]}"
+            desired_fmt = (task.image_format or config.get("image_format", "original")).lower()
+            out_ext = "jpg" if desired_fmt in ["jpg", "jpeg"] else ("png" if desired_fmt == "png" else ("webp" if desired_fmt == "webp" else "jpg"))
+
+            out_filename = f"{clean_t}.{out_ext}"
+            out_filepath = os.path.join(target_dir, out_filename)
+            counter = 1
+            while os.path.exists(out_filepath):
+                out_filepath = os.path.join(target_dir, f"{clean_t}_{counter}.{out_ext}")
+                counter += 1
+
+            task.target_filepath = out_filepath
+            s = requests.Session()
+            s.headers.update({
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+                "Referer": task.url
+            })
+            resp = s.get(img_url, timeout=15)
+            resp.raise_for_status()
+            img_bytes = resp.content
+
+            from PIL import Image
+            import io
+            with Image.open(io.BytesIO(img_bytes)) as pil_img:
+                if out_ext == "jpg":
+                    pil_img.convert("RGB").save(out_filepath, "JPEG", quality=95)
+                elif out_ext == "png":
+                    pil_img.save(out_filepath, "PNG")
+                elif out_ext == "webp":
+                    pil_img.save(out_filepath, "WEBP", quality=95)
+                else:
+                    with open(out_filepath, "wb") as f:
+                        f.write(img_bytes)
+
+            task.downloaded_bytes = os.path.getsize(out_filepath)
+            task.total_bytes = task.downloaded_bytes
+            task.progress = 100.0
+            task.speed_str = "Done"
+            task.eta_str = "00:00"
+            task.size_str = format_bytes(task.downloaded_bytes)
+            task.status = "completed"
+
+            config.add_history({
+                "id": task.task_id,
+                "title": task.title,
+                "url": task.url,
+                "platform": task.platform,
+                "filepath": task.target_filepath,
+                "mode": "image",
+                "resolution": f"Photo ({out_ext.upper()})",
+                "filesize": format_bytes(task.downloaded_bytes),
+                "timestamp": time.strftime("%Y-%m-%d %H:%M"),
+                "status": "completed"
+            })
+
+            if config.get("completion_sound", True):
+                try:
+                    import winsound
+                    winsound.MessageBeep(winsound.MB_ICONASTERISK)
+                except Exception:
+                    pass
+
+        except Exception as e:
+            task.status = "error"
+            task.error_message = str(e)
+            print(f"Image download error: {e}")
         finally:
             with self.lock:
                 self.active_count = max(0, self.active_count - 1)

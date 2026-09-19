@@ -369,7 +369,7 @@ class DownloadView(ctk.CTkFrame):
 
         self.mode_segmented = ctk.CTkSegmentedButton(
             mode_row,
-            values=["🎬 Video (MP4)", "🎵 Audio Only (MP3)"],
+            values=["🎬 Video (MP4)", "🎵 Audio (MP3)", "🖼 Image (HD)"],
             command=self._on_mode_changed,
             height=32,
             selected_color=NEON_CYAN_DEEP,
@@ -423,6 +423,36 @@ class DownloadView(ctk.CTkFrame):
         )
         self.audio_bitrate_menu.pack(side="left")
         self._populate_audio_bitrate_menu()
+
+        # Image Configuration Row (for Image Mode)
+        self.image_row = ctk.CTkFrame(self.options_card, fg_color="transparent")
+
+        self.image_format_lbl = ctk.CTkLabel(self.image_row, text="Image Format:", width=120, anchor="w", font=ctk.CTkFont(size=13))
+        self.image_format_lbl.pack(side="left")
+
+        self.image_format_menu = ctk.CTkOptionMenu(
+            self.image_row,
+            values=["Original (Best)", "JPG (Universal)", "PNG (Lossless)", "WebP"],
+            width=155,
+            height=32
+        )
+        cur_img_fmt = config.get("image_format", "Original (Best)")
+        if cur_img_fmt not in ["Original (Best)", "JPG (Universal)", "PNG (Lossless)", "WebP"]:
+            cur_img_fmt = "Original (Best)"
+        self.image_format_menu.set(cur_img_fmt)
+        self.image_format_menu.pack(side="left", padx=(0, 15))
+
+        self.image_quality_lbl = ctk.CTkLabel(self.image_row, text="Quality:", anchor="w", font=ctk.CTkFont(size=13))
+        self.image_quality_lbl.pack(side="left", padx=(0, 8))
+
+        self.image_quality_menu = ctk.CTkOptionMenu(
+            self.image_row,
+            values=["Original (Master HD)", "High Quality (1080p)", "Standard (736p)"],
+            width=210,
+            height=32
+        )
+        self.image_quality_menu.set("Original (Master HD)")
+        self.image_quality_menu.pack(side="left")
 
         # File Naming Format Row
         self.naming_row = ctk.CTkFrame(self.options_card, fg_color="transparent")
@@ -701,10 +731,28 @@ class DownloadView(ctk.CTkFrame):
     def _on_mode_changed(self, value):
         if "Audio" in value:
             self.res_row.pack_forget()
+            self.image_row.pack_forget()
             self.audio_row.pack(fill="x", padx=20, pady=6, after=self.mode_segmented.master)
+            if hasattr(self, "subs_row"):
+                self.subs_row.pack_forget()
+            if hasattr(self, "trim_container"):
+                self.trim_container.pack(fill="x", padx=20, pady=6, after=self.naming_row)
+        elif "Image" in value:
+            self.res_row.pack_forget()
+            self.audio_row.pack_forget()
+            self.image_row.pack(fill="x", padx=20, pady=6, after=self.mode_segmented.master)
+            if hasattr(self, "subs_row"):
+                self.subs_row.pack_forget()
+            if hasattr(self, "trim_container"):
+                self.trim_container.pack_forget()
         else:
             self.audio_row.pack_forget()
+            self.image_row.pack_forget()
             self.res_row.pack(fill="x", padx=20, pady=6, after=self.mode_segmented.master)
+            if hasattr(self, "subs_row"):
+                self.subs_row.pack(fill="x", padx=20, pady=6, after=self.naming_row)
+            if hasattr(self, "trim_container"):
+                self.trim_container.pack(fill="x", padx=20, pady=6, after=self.subs_row)
 
     def _on_browse_clicked(self):
         folder = ctk.filedialog.askdirectory(initialdir=config.download_dir)
@@ -836,6 +884,16 @@ class DownloadView(ctk.CTkFrame):
             else:
                 self._safe_reset_thumbnail("No Thumbnail")
 
+            # Auto-switch to Image mode if analyzing a photo pin
+            is_image_pin = bool(info.raw_info and info.raw_info.get("is_image"))
+            if is_image_pin:
+                self.mode_segmented.set("🖼 Image (HD)")
+                self._on_mode_changed("🖼 Image (HD)")
+            else:
+                if self.mode_segmented.get() == "🖼 Image (HD)":
+                    self.mode_segmented.set("🎬 Video (MP4)")
+                    self._on_mode_changed("🎬 Video (MP4)")
+
             # Set default trimmer end time to video duration
             if info.duration_str and info.duration_str != "Live":
                 self.trim_end_entry.delete(0, "end")
@@ -868,15 +926,24 @@ class DownloadView(ctk.CTkFrame):
         if not self.current_video_info:
             return
 
-        is_audio = "Audio" in self.mode_segmented.get()
-        mode = "audio" if is_audio else "video"
+        mode_val = self.mode_segmented.get()
+        if "Audio" in mode_val:
+            mode = "audio"
+        elif "Image" in mode_val:
+            mode = "image"
+        else:
+            mode = "video"
+
         resolution = self.res_menu.get()
         audio_fmt = self.audio_format_menu.get()
         bitrate_str = self.audio_bitrate_menu.get().split()[0]
 
+        raw_img_fmt = self.image_format_menu.get().split()[0].lower()
+        img_fmt = "jpg" if "jpg" in raw_img_fmt else ("png" if "png" in raw_img_fmt else ("webp" if "webp" in raw_img_fmt else "original"))
+
         # Pro Feature Gate: 4K/2K UHD Video and 320k Audio
-        is_4k = not is_audio and (any(q in resolution for q in ["4K", "2160", "1440"]) or "👑" in resolution or "Pro Only" in resolution)
-        is_320k = is_audio and ("320" in bitrate_str or "👑" in self.audio_bitrate_menu.get())
+        is_4k = (mode == "video") and (any(q in resolution for q in ["4K", "2160", "1440"]) or "👑" in resolution or "Pro Only" in resolution)
+        is_320k = (mode == "audio") and ("320" in bitrate_str or "👑" in self.audio_bitrate_menu.get())
         if (is_4k or is_320k) and not is_pro_active():
             ProDialog(self.winfo_toplevel())
             feat_name = "4K / 2K Ultra HD video" if is_4k else "320kbps High Fidelity audio"
@@ -900,13 +967,13 @@ class DownloadView(ctk.CTkFrame):
             order_num = 1
 
         time_range = None
-        if self.trim_var.get():
+        if self.trim_var.get() and mode != "image":
             s_val = self.trim_start_entry.get().strip()
             e_val = self.trim_end_entry.get().strip()
             if s_val or e_val:
                 time_range = (s_val or "00:00", e_val or "")
 
-        subtitles_choice = self.subtitles_menu.get()
+        subtitles_choice = self.subtitles_menu.get() if mode != "image" else "None"
 
         task = download_manager.add_task(
             url=self.current_video_info.url,
@@ -917,6 +984,7 @@ class DownloadView(ctk.CTkFrame):
             resolution=clean_res,
             audio_format=audio_fmt,
             audio_bitrate=bitrate_str,
+            image_format=img_fmt,
             save_dir=config.download_dir,
             naming_template=self.naming_menu.get(),
             order_num=order_num,

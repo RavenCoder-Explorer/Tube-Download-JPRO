@@ -251,6 +251,28 @@ class SettingsView(ctk.CTkFrame):
         self.subfolder_menu.set(cur_subfolder)
         self.subfolder_menu.pack(side="left")
 
+        # Preferred Image Format row
+        img_fmt_row = ctk.CTkFrame(rules_card, fg_color="transparent")
+        img_fmt_row.pack(fill="x", padx=20, pady=6)
+
+        img_fmt_lbl = ctk.CTkLabel(img_fmt_row, text="Preferred Image Format:", width=180, anchor="w", font=ctk.CTkFont(size=13))
+        img_fmt_lbl.pack(side="left")
+
+        img_fmt_options = ["Original (Best)", "JPG (Universal)", "PNG (Lossless)", "WebP"]
+        cur_img_fmt = config.get("image_format", "Original (Best)")
+        if cur_img_fmt not in img_fmt_options:
+            cur_img_fmt = "Original (Best)"
+
+        self.img_fmt_menu = ctk.CTkOptionMenu(
+            img_fmt_row,
+            values=img_fmt_options,
+            command=self._change_image_format,
+            width=220,
+            height=32
+        )
+        self.img_fmt_menu.set(cur_img_fmt)
+        self.img_fmt_menu.pack(side="left")
+
         # Duplicate detection checkbox
         dup_row = ctk.CTkFrame(rules_card, fg_color="transparent")
         dup_row.pack(fill="x", padx=20, pady=(10, 4))
@@ -282,6 +304,22 @@ class SettingsView(ctk.CTkFrame):
             checkbox_height=20
         )
         self.clip_cb.pack(anchor="w")
+
+        # Auto-save thumbnail with video
+        thumb_save_row = ctk.CTkFrame(rules_card, fg_color="transparent")
+        thumb_save_row.pack(fill="x", padx=20, pady=(6, 8))
+
+        self.auto_thumb_var = ctk.BooleanVar(value=bool(config.get("auto_save_thumbnail", False)))
+        self.auto_thumb_cb = ctk.CTkCheckBox(
+            thumb_save_row,
+            text="🖼 Auto-save thumbnail: Save high-res cover image (.jpg) alongside downloaded videos",
+            variable=self.auto_thumb_var,
+            command=self._change_auto_thumbnail,
+            font=ctk.CTkFont(size=13),
+            checkbox_width=20,
+            checkbox_height=20
+        )
+        self.auto_thumb_cb.pack(anchor="w")
 
         # Sound effects checkbox
         sound_row = ctk.CTkFrame(rules_card, fg_color="transparent")
@@ -622,6 +660,12 @@ class SettingsView(ctk.CTkFrame):
 
     def _change_subfolder_rule(self, val: str):
         config.set("organize_subfolders", val)
+
+    def _change_image_format(self, val: str):
+        config.set("image_format", val)
+
+    def _change_auto_thumbnail(self):
+        config.set("auto_save_thumbnail", self.auto_thumb_var.get())
 
     def _change_dup_skip(self):
         config.set("skip_existing_files", self.dup_var.get())

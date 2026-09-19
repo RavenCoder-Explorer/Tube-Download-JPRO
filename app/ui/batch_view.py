@@ -638,7 +638,8 @@ class BatchView(ctk.CTkFrame):
                 "🎬 Video: Best Quality (Up to 4K/8K)",
                 "🎬 Video: 1080p Full HD",
                 "🎬 Video: 720p HD",
-                "🎵 Audio: MP3 320k High Quality"
+                "🎵 Audio: MP3 320k High Quality",
+                "🖼 Photos & Images: Original HD"
             ]
             def_val = "🎬 Video: Best Quality (Up to 4K/8K)"
         else:
@@ -648,7 +649,8 @@ class BatchView(ctk.CTkFrame):
                 "👑 Video: 4K / 2K Ultra HD (Pro Only)",
                 "🎬 Video: 720p HD",
                 "🎵 Audio: MP3 192k Standard",
-                "👑 Audio: MP3 320k (Pro Only)"
+                "👑 Audio: MP3 320k (Pro Only)",
+                "🖼 Photos & Images: Original HD"
             ]
             def_val = "🎬 Video: Best Quality (Max 720p)"
 
@@ -929,8 +931,12 @@ class BatchView(ctk.CTkFrame):
             )
             return
 
-        is_audio = "Audio" in preset
-        mode = "audio" if is_audio else "video"
+        if "Audio" in preset:
+            mode = "audio"
+        elif "Image" in preset or "Photo" in preset:
+            mode = "image"
+        else:
+            mode = "video"
 
         resolution = "Best Quality"
         if not is_pro_active():
@@ -972,6 +978,7 @@ class BatchView(ctk.CTkFrame):
         self._reindex_rows()
 
         s_limit = self.speed_menu.get()
+        img_fmt = config.get("image_format", "original")
         for row in pending_rows:
             task = download_manager.add_task(
                 url=row.url,
@@ -981,6 +988,7 @@ class BatchView(ctk.CTkFrame):
                 resolution=resolution,
                 audio_format="mp3",
                 audio_bitrate=audio_bitrate,
+                image_format=img_fmt,
                 save_dir=save_dir,
                 naming_template=self.naming_menu.get(),
                 order_num=row.index,
