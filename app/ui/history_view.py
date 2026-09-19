@@ -54,6 +54,7 @@ class ActiveTaskCard(ctk.CTkFrame):
             "youtube": ("#DC2626", "white"),
             "tiktok": ("#06B6D4", "#0F172A"),
             "instagram": ("#E1306C", "white"),
+            "pinterest": ("#E60023", "white"),
             "other": ("#6B7280", "white")
         }
         bg_col, txt_col = plat_colors.get(self.task.platform, ("#6B7280", "white"))
@@ -238,6 +239,7 @@ class HistoryItemCard(ctk.CTkFrame):
             "youtube": ("#DC2626", "white"),
             "tiktok": ("#06B6D4", "#0F172A"),
             "instagram": ("#E1306C", "white"),
+            "pinterest": ("#E60023", "white"),
             "other": ("#6B7280", "white")
         }
         bg_col, txt_col = plat_colors.get(plat, ("#6B7280", "white"))

@@ -794,7 +794,10 @@ class DownloadView(ctk.CTkFrame):
             res_color = ("#2563EB", "#1D4ED8")
             if info.available_resolutions:
                 top_res = info.available_resolutions[0]
-                if "4K" in top_res or "2160" in top_res:
+                if "Image" in top_res or (info.raw_info and info.raw_info.get("is_image")):
+                    res_text = "IMAGE HD"
+                    res_color = ("#E60023", "#DC2626")
+                elif "4K" in top_res or "2160" in top_res:
                     res_text = "4K UHD"
                     res_color = ("#7C3AED", "#6D28D9")
                 elif "1080" in top_res or "Full HD" in top_res:
@@ -918,7 +921,8 @@ class DownloadView(ctk.CTkFrame):
             naming_template=self.naming_menu.get(),
             order_num=order_num,
             time_range=time_range,
-            subtitles_mode=subtitles_choice
+            subtitles_mode=subtitles_choice,
+            extra_info=self.current_video_info.raw_info
         )
 
         self.status_label.configure(

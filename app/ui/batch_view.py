@@ -713,7 +713,7 @@ class BatchView(ctk.CTkFrame):
         urls = extract_supported_urls(raw_text)
         if not urls:
             self.overall_label.configure(
-                text="⚠ No supported links found. Ensure links are YouTube, TikTok, or Instagram.",
+                text="⚠ No supported links found. Ensure links are YouTube, TikTok, Instagram, or Pinterest.",
                 text_color="#EF4444"
             )
             return
@@ -906,7 +906,7 @@ class BatchView(ctk.CTkFrame):
         # 2. Check if batch queue is empty
         if not self.rows:
             self.overall_label.configure(
-                text="⚠ Please paste or add at least one video, Shorts, or Reels link first!",
+                text="⚠ Please paste or add at least one video, Shorts, Reels, or Pinterest link first!",
                 text_color="#EF4444"
             )
             return

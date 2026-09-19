@@ -3,6 +3,7 @@ import re
 import sys
 import time
 import uuid
+import json
 import shutil
 import threading
 from dataclasses import dataclass, field
@@ -154,23 +155,200 @@ def format_bytes(bytes_num: Optional[float]) -> str:
     return f"{val:.1f} {units[unit_idx]}"
 
 
+def sanitize_filename(name: str) -> str:
+    """Removes invalid filesystem characters from filename."""
+    return re.sub(r'[\\/*?:"<>|]', "", name).strip()
+
+
+_pinterest_session: Optional[requests.Session] = None
+
+def get_pinterest_session() -> requests.Session:
+    global _pinterest_session
+    if _pinterest_session is None:
+        _pinterest_session = requests.Session()
+        _pinterest_session.headers.update({
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+            "Accept-Language": "en-US,en;q=0.9",
+        })
+        try:
+            _pinterest_session.get("https://www.pinterest.com/", timeout=6)
+        except Exception:
+            pass
+    return _pinterest_session
+
+
+def reset_pinterest_session() -> requests.Session:
+    global _pinterest_session
+    _pinterest_session = None
+    return get_pinterest_session()
+
+
+def extract_pinterest_pin_data(url: str) -> Dict[str, Any]:
+    """Extracts direct video or high-resolution image stream and metadata from any Pinterest Pin or pin.it link."""
+    clean_url = resolve_media_url(url)
+    s = get_pinterest_session()
+
+    id_match = re.search(r'/(?:pin|idea)/(\d+)', clean_url)
+    pin_id = id_match.group(1) if id_match else str(uuid.uuid4())
+    canonical_url = f"https://www.pinterest.com/pin/{pin_id}/" if id_match else clean_url
+
+    title = ""
+    author = "Pinterest Creator"
+    image_url = ""
+    video_url = ""
+
+    # Method 1: Query Pinterest PinResource API (highest accuracy for exact titles, master originals, and MP4 videos)
+    if id_match:
+        for attempt in range(2):
+            try:
+                api_url = "https://www.pinterest.com/resource/PinResource/get/"
+                params = {
+                    'data': json.dumps({
+                        'options': {
+                            'field_set_key': 'unauth_react_main_pin',
+                            'id': pin_id
+                        }
+                    })
+                }
+                headers = {
+                    'X-Pinterest-PWS-Handler': 'www/[username].js',
+                    'Referer': f'https://www.pinterest.com/pin/{pin_id}/'
+                }
+                api_resp = s.get(api_url, params=params, headers=headers, timeout=8)
+                if api_resp.status_code == 429 and attempt == 0:
+                    s = reset_pinterest_session()
+                    continue
+                if api_resp.status_code == 200:
+                    res_data = api_resp.json().get('resource_response', {}).get('data', {})
+                    if res_data:
+                        title = res_data.get('title') or res_data.get('grid_title') or res_data.get('closeup_unified_description') or ""
+                        author = res_data.get('pinner', {}).get('full_name') or res_data.get('closeup_attribution', {}).get('full_name') or author
+
+                        # Videos
+                        videos_obj = res_data.get('videos') or {}
+                        v_list = videos_obj.get('video_list', {}) if isinstance(videos_obj, dict) else {}
+                        if isinstance(v_list, dict):
+                            for q in ['V_720P', 'V_1080P', 'V_EXP7']:
+                                if q in v_list and v_list[q].get('url') and v_list[q]['url'].endswith('.mp4'):
+                                    video_url = v_list[q]['url']
+                                    break
+                            if not video_url:
+                                for k, v in v_list.items():
+                                    if isinstance(v, dict) and v.get('url') and v['url'].endswith('.mp4'):
+                                        video_url = v['url']
+                                        break
+
+                        # Images
+                        img_dict = res_data.get('images', {})
+                        if isinstance(img_dict, dict):
+                            orig = img_dict.get('orig')
+                            if isinstance(orig, dict) and orig.get('url'):
+                                image_url = orig['url']
+                            if not image_url:
+                                h736 = img_dict.get('736x')
+                                if isinstance(h736, dict) and h736.get('url'):
+                                    image_url = h736['url']
+                        if video_url or image_url:
+                            break
+            except Exception as api_err:
+                print(f"PinResource API attempt error: {api_err}")
+
+    # Method 2: Fallback to HTML webpage scraping if API didn't get all media
+    if not (video_url or image_url):
+        resp = s.get(canonical_url, headers={"Referer": "https://www.pinterest.com/"}, timeout=12)
+        if resp.status_code == 200:
+            html = resp.text
+
+            # Check JSON-LD metadata
+            ld_matches = re.findall(r'<script[^>]+type=["\']application/ld\+json["\'][^>]*>(.*?)</script>', html, re.DOTALL)
+            for ld_text in ld_matches:
+                try:
+                    data = json.loads(ld_text)
+                    if isinstance(data, dict):
+                        if not title:
+                            title = data.get("headline") or data.get("name") or data.get("articleBody") or ""
+                        if not author or author == "Pinterest Creator":
+                            auth_obj = data.get("author")
+                            if isinstance(auth_obj, dict):
+                                author = auth_obj.get("name") or author
+                        if not image_url:
+                            image_url = data.get("image") or ""
+                        if not video_url:
+                            video_url = data.get("contentUrl") or ""
+                except Exception:
+                    pass
+
+            # Check for direct mp4 video links in page
+            if not video_url:
+                v_matches = re.findall(r'https://v\.pinimg\.com/videos/[^\"]+?\.mp4', html)
+                if not v_matches:
+                    v_matches = re.findall(r'https://[^\"]+?\.mp4', html)
+                if v_matches:
+                    video_url = v_matches[0]
+                    for vm in v_matches:
+                        if "720p" in vm or "1080p" in vm:
+                            video_url = vm
+                            break
+
+            # Look for original master image if no image found yet
+            if not image_url:
+                orig_imgs = re.findall(r'https://i\.pinimg\.com/originals/[^\"]+?\.(?:jpg|png|webp|gif)', html)
+                if orig_imgs:
+                    image_url = orig_imgs[0]
+                else:
+                    hd_imgs = re.findall(r'https://i\.pinimg\.com/736x/[^\"]+?\.(?:jpg|png|webp|gif)', html)
+                    if hd_imgs:
+                        image_url = hd_imgs[0]
+
+            if not title:
+                t_match = re.search(r'<title>(.*?)</title>', html, re.IGNORECASE)
+                if t_match:
+                    title = t_match.group(1).replace(" | Pinterest", "").strip()
+
+    if not title:
+        title = f"Pinterest Pin {pin_id}"
+
+    is_video = bool(video_url)
+    download_url = video_url if is_video else image_url
+    ext = "mp4" if is_video else ("png" if image_url.endswith(".png") else "jpg")
+
+    return {
+        "id": pin_id,
+        "title": title,
+        "uploader": author,
+        "video_url": video_url,
+        "image_url": image_url,
+        "canonical_url": canonical_url,
+        "is_video": is_video,
+        "download_url": download_url,
+        "ext": ext
+    }
+
+
 def resolve_media_url(url: str) -> str:
     """Expands redirect shortlinks (e.g. pin.it, youtu.be) into canonical URLs."""
     clean = url.strip()
     lower = clean.lower()
     if "pin.it/" in lower:
+        s = get_pinterest_session()
         try:
-            resp = requests.head(clean, allow_redirects=True, timeout=6, headers={"User-Agent": "Mozilla/5.0"})
-            if resp.url and "pin" in resp.url.lower():
-                return resp.url
+            resp = s.head(clean, allow_redirects=True, timeout=8)
+            if resp.url and ("pin" in resp.url.lower() or "idea" in resp.url.lower()):
+                clean = resp.url
         except Exception:
-            pass
-        try:
-            resp = requests.get(clean, allow_redirects=True, timeout=6, stream=True, headers={"User-Agent": "Mozilla/5.0"})
-            if resp.url and "pin" in resp.url.lower():
-                return resp.url
-        except Exception:
-            pass
+            try:
+                resp = s.get(clean, allow_redirects=True, timeout=8, stream=True)
+                if resp.url and ("pin" in resp.url.lower() or "idea" in resp.url.lower()):
+                    clean = resp.url
+            except Exception:
+                pass
+
+    if "pinterest." in clean.lower() or "pin.it" in clean.lower():
+        id_match = re.search(r'/(?:pin|idea)/(\d+)', clean)
+        if id_match:
+            clean = f"https://www.pinterest.com/pin/{id_match.group(1)}/"
+
     return clean
 
 
@@ -187,7 +365,7 @@ def detect_platform(url: str) -> str:
         return "instagram"
     elif "instagram.com" in lower:
         return "instagram"
-    elif "pinterest.com" in lower or "pin.it" in lower:
+    elif "pinterest." in lower or "pin.it" in lower:
         return "pinterest"
     return "other"
 
@@ -225,7 +403,7 @@ def extract_supported_urls(text: str) -> List[str]:
             or "tiktok.com" in lower
             or "douyin.com" in lower
             or "instagram.com" in lower
-            or "pinterest.com" in lower
+            or "pinterest." in lower
             or "pin.it" in lower
         ):
             if u not in seen:
@@ -345,9 +523,38 @@ class VideoInfo:
 
 
 def fetch_video_metadata(url: str) -> VideoInfo:
-    """Extracts metadata from YouTube, Shorts, TikTok, Instagram, or Pinterest URL using yt-dlp."""
+    """Extracts metadata from YouTube, Shorts, TikTok, Instagram, or Pinterest URL."""
     resolved_url = resolve_media_url(url)
     platform = detect_platform(resolved_url)
+
+    if platform == "pinterest":
+        try:
+            p_data = extract_pinterest_pin_data(resolved_url)
+            is_vid = p_data["is_video"]
+            dl_url = p_data["download_url"]
+            res_list = ["720p (HD)", "Best Quality"] if is_vid else ["Original Image (HD)"]
+            return VideoInfo(
+                url=url,
+                id=p_data["id"],
+                title=p_data["title"],
+                uploader=p_data["uploader"],
+                duration=0,
+                duration_str="Video" if is_vid else "Image",
+                view_count=0,
+                view_count_str="📌 Pin",
+                thumbnail_url=p_data["image_url"],
+                platform="pinterest",
+                available_resolutions=res_list,
+                raw_info={
+                    "pinterest_data": p_data,
+                    "direct_download_url": dl_url,
+                    "is_image": not is_vid,
+                    "ext": p_data["ext"],
+                    "uploader": p_data["uploader"]
+                }
+            )
+        except Exception as pe:
+            print(f"Pinterest custom extractor warning: {pe}, trying yt-dlp...")
 
     ydl_opts = {
         "quiet": True,
@@ -488,6 +695,7 @@ class DownloadTask:
     error_message: str = ""
     target_filepath: str = ""
     cancel_requested: bool = False
+    extra_info: Dict[str, Any] = field(default_factory=dict)
 
 
 class DownloadManager:
@@ -528,7 +736,8 @@ class DownloadManager:
         subtitles_mode: Optional[str] = None,
         speed_limit: Optional[str] = None,
         subfolder_rule: Optional[str] = None,
-        skip_existing: Optional[bool] = None
+        skip_existing: Optional[bool] = None,
+        extra_info: Optional[Dict[str, Any]] = None
     ) -> DownloadTask:
         save_directory = save_dir or config.download_dir
         os.makedirs(save_directory, exist_ok=True)
@@ -564,7 +773,8 @@ class DownloadManager:
             subtitles_mode=sub_mode,
             speed_limit=s_limit,
             subfolder_rule=s_rule,
-            skip_existing=s_skip
+            skip_existing=s_skip,
+            extra_info=extra_info or {}
         )
 
         with self.lock:
@@ -860,6 +1070,11 @@ class DownloadManager:
             task.status = "downloading"
             self._notify(task)
 
+            # High-speed direct streaming for Pinterest (Videos and HD Images)
+            if task.platform == "pinterest":
+                self._run_pinterest_download(task)
+                return
+
             ydl_opts = self._build_ydl_options(task)
 
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -925,6 +1140,126 @@ class DownloadManager:
             task.status = "error"
             task.error_message = str(e)
             print(f"Download task error: {e}")
+        finally:
+            with self.lock:
+                self.active_count = max(0, self.active_count - 1)
+            self._notify(task)
+            self._process_queue()
+
+    def _run_pinterest_download(self, task: DownloadTask) -> None:
+        """Direct streaming download worker for Pinterest Pins (Videos and HD Images)."""
+        try:
+            direct_url = ""
+            ext = "mp4"
+            creator = "Pinterest"
+            if task.extra_info and task.extra_info.get("direct_download_url"):
+                direct_url = task.extra_info["direct_download_url"]
+                ext = task.extra_info.get("ext", "mp4")
+                creator = task.extra_info.get("uploader") or "Pinterest"
+                if not task.thumbnail_url and task.extra_info.get("image_url"):
+                    task.thumbnail_url = task.extra_info["image_url"]
+            else:
+                p_data = extract_pinterest_pin_data(task.url)
+                direct_url = p_data["download_url"]
+                ext = p_data["ext"]
+                creator = p_data.get("uploader") or "Pinterest"
+                if not task.title or task.title == "Loading metadata...":
+                    task.title = p_data["title"]
+                if not task.thumbnail_url:
+                    task.thumbnail_url = p_data["image_url"]
+
+            if not direct_url:
+                raise RuntimeError("Could not find direct media stream for Pinterest Pin.")
+
+            target_dir = task.save_dir or config.download_dir
+            sub_mode = task.subfolder_rule or config.get("organize_subfolders", "None")
+            if sub_mode == "By Platform":
+                target_dir = os.path.join(target_dir, "Pinterest")
+            elif sub_mode == "By Creator" and creator:
+                target_dir = os.path.join(target_dir, sanitize_filename(creator))
+            elif sub_mode == "By Platform & Creator":
+                target_dir = os.path.join(target_dir, "Pinterest", sanitize_filename(creator))
+            os.makedirs(target_dir, exist_ok=True)
+
+            clean_t = sanitize_filename(task.title)[:60].strip() or f"Pinterest_{task.task_id[:8]}"
+            out_filename = f"{clean_t}.{ext}"
+            out_filepath = os.path.join(target_dir, out_filename)
+
+            counter = 1
+            while os.path.exists(out_filepath):
+                out_filepath = os.path.join(target_dir, f"{clean_t}_{counter}.{ext}")
+                counter += 1
+
+            task.target_filepath = out_filepath
+            s = get_pinterest_session()
+            r_stream = s.get(direct_url, stream=True, timeout=20, headers={"Referer": "https://www.pinterest.com/"})
+            r_stream.raise_for_status()
+
+            total_bytes = int(r_stream.headers.get("content-length", 0))
+            task.total_bytes = total_bytes
+            downloaded = 0
+            start_time = time.time()
+            last_notify = start_time
+
+            with open(out_filepath, "wb") as f:
+                for chunk in r_stream.iter_content(chunk_size=65536):
+                    if task.cancel_requested:
+                        raise yt_dlp.utils.DownloadCancelled("Download cancelled by user.")
+                    if chunk:
+                        f.write(chunk)
+                        downloaded += len(chunk)
+                        task.downloaded_bytes = downloaded
+
+                        now = time.time()
+                        if now - last_notify >= 0.25:
+                            last_notify = now
+                            elapsed = max(0.01, now - start_time)
+                            speed = downloaded / elapsed
+                            task.speed_str = f"{format_bytes(speed)}/s"
+                            if total_bytes > 0:
+                                task.progress = min(99.0, (downloaded / total_bytes) * 100.0)
+                                task.size_str = f"{format_bytes(downloaded)} / {format_bytes(total_bytes)}"
+                                rem_bytes = max(0, total_bytes - downloaded)
+                                eta = rem_bytes / max(1, speed)
+                                task.eta_str = format_duration(int(eta))
+                            else:
+                                task.size_str = format_bytes(downloaded)
+                            self._notify(task)
+
+            task.status = "completed"
+            task.progress = 100.0
+            task.speed_str = "Done"
+            task.eta_str = "00:00"
+            task.downloaded_bytes = downloaded
+            task.size_str = format_bytes(downloaded)
+
+            config.add_history({
+                "id": task.task_id,
+                "title": task.title,
+                "url": task.url,
+                "platform": "pinterest",
+                "filepath": task.target_filepath,
+                "mode": "image" if ext in ("jpg", "jpeg", "png", "webp") else "video",
+                "resolution": "Original Image (HD)" if ext in ("jpg", "jpeg", "png", "webp") else "Video HD",
+                "filesize": format_bytes(downloaded),
+                "timestamp": time.strftime("%Y-%m-%d %H:%M"),
+                "status": "completed"
+            })
+
+            if config.get("completion_sound", True):
+                try:
+                    import winsound
+                    winsound.MessageBeep(winsound.MB_ICONASTERISK)
+                except Exception:
+                    pass
+
+        except yt_dlp.utils.DownloadCancelled:
+            task.status = "cancelled"
+            task.error_message = "Cancelled"
+        except Exception as e:
+            task.status = "error"
+            task.error_message = str(e)
+            print(f"Pinterest direct download error: {e}")
         finally:
             with self.lock:
                 self.active_count = max(0, self.active_count - 1)
