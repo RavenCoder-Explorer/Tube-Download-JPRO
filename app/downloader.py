@@ -670,6 +670,7 @@ def fetch_video_metadata(url: str) -> VideoInfo:
                 platform="tiktok",
                 available_resolutions=res_list,
                 raw_info={
+                    "id": t_data.get("id") or "",
                     "tiktok_data": t_data,
                     "direct_download_url": t_data.get("download_url", ""),
                     "music_url": t_data.get("music_url", ""),
@@ -721,6 +722,7 @@ def fetch_video_metadata(url: str) -> VideoInfo:
                     platform="tiktok",
                     available_resolutions=res_list,
                     raw_info={
+                        "id": t_data.get("id") or "",
                         "tiktok_data": t_data,
                         "direct_download_url": t_data.get("download_url", ""),
                         "music_url": t_data.get("music_url", ""),
@@ -824,6 +826,67 @@ NAMING_EXAMPLES: Dict[str, str] = {
     "[Platform] 001 - Title": "[YouTube] 001 - Amazing Video.mp4",
     "[Platform] Title": "[YouTube] Amazing Video.mp4"
 }
+
+
+def format_custom_filename(
+    naming_template: str,
+    title: str,
+    video_id: str = "",
+    uploader: str = "",
+    platform: str = "",
+    ext: str = "mp4",
+    order_num: int = 1,
+    upload_date: str = ""
+) -> str:
+    """Renders formatted filename according to user's selected naming template."""
+    clean_t = sanitize_filename(title)[:80].strip() or "Media"
+    clean_id = sanitize_filename(video_id)[:30].strip() or "video"
+    clean_uploader = sanitize_filename(uploader)[:40].strip() or "Creator"
+
+    platform_names = {
+        "youtube": "YouTube",
+        "shorts": "YouTube",
+        "tiktok": "TikTok",
+        "instagram": "Instagram",
+        "pinterest": "Pinterest",
+        "other": "Web"
+    }
+    clean_platform = platform_names.get(platform.lower(), platform.capitalize() if platform else "Media")
+    clean_date = upload_date or time.strftime("%Y-%m-%d")
+    clean_ext = ext.lstrip(".").lower() or "mp4"
+
+    tmpl = (naming_template or "Title + ID (Default)").strip()
+    for k, v in NAMING_TEMPLATES.items():
+        if tmpl == v:
+            tmpl = k
+            break
+
+    if tmpl == "001 - Title":
+        fn = f"{order_num:03d} - {clean_t}.{clean_ext}"
+    elif tmpl == "001 - Title + ID":
+        fn = f"{order_num:03d} - {clean_t} [{clean_id}].{clean_ext}"
+    elif tmpl == "001_Title":
+        fn = f"{order_num:03d}_{clean_t}.{clean_ext}"
+    elif tmpl == "Title - 001":
+        fn = f"{clean_t} - {order_num:03d}.{clean_ext}"
+    elif tmpl == "01 - Title":
+        fn = f"{order_num:02d} - {clean_t}.{clean_ext}"
+    elif tmpl == "Title Only":
+        fn = f"{clean_t}.{clean_ext}"
+    elif tmpl == "Creator - 001 - Title":
+        fn = f"{clean_uploader} - {order_num:03d} - {clean_t}.{clean_ext}"
+    elif tmpl == "Creator - Title":
+        fn = f"{clean_uploader} - {clean_t}.{clean_ext}"
+    elif tmpl == "Upload Date - Title":
+        fn = f"{clean_date} - {clean_t}.{clean_ext}"
+    elif tmpl == "[Platform] 001 - Title":
+        fn = f"[{clean_platform}] {order_num:03d} - {clean_t}.{clean_ext}"
+    elif tmpl == "[Platform] Title":
+        fn = f"[{clean_platform}] {clean_t}.{clean_ext}"
+    else:
+        fn = f"{clean_t} [{clean_id}].{clean_ext}"
+
+    return fn
 
 
 @dataclass
@@ -1047,12 +1110,34 @@ class DownloadManager:
         ffmpeg_path = ensure_ffmpeg_in_path()
         has_ffmpeg = ffmpeg_path is not None
 
-        template_raw = NAMING_TEMPLATES.get(task.naming_template, "%(title)s [%(id)s].%(ext)s")
+        template_raw = NAMING_TEMPLATES.get(task.naming_template)
+        if not template_raw:
+            if task.naming_template and "%(" in task.naming_template:
+                template_raw = task.naming_template
+            else:
+                template_raw = "%(title)s [%(id)s].%(ext)s"
+
         num_val = getattr(task, "order_num", 1) or 1
+        template_pattern = template_raw
+        if "{num:03d}" in template_pattern:
+            template_pattern = template_pattern.replace("%(playlist_index|{num:03d})03d", f"{num_val:03d}").replace("{num:03d}", f"{num_val:03d}")
+        if "{num:02d}" in template_pattern:
+            template_pattern = template_pattern.replace("%(playlist_index|{num:02d})02d", f"{num_val:02d}").replace("{num:02d}", f"{num_val:02d}")
+        clean_platforms = {
+            "youtube": "YouTube",
+            "shorts": "YouTube",
+            "tiktok": "TikTok",
+            "instagram": "Instagram",
+            "pinterest": "Pinterest",
+            "other": "Web"
+        }
+        plat_lbl = clean_platforms.get((task.platform or "").lower(), (task.platform or "Media").capitalize())
+        if "[%(extractor)s]" in template_pattern:
+            template_pattern = template_pattern.replace("[%(extractor)s]", f"[{plat_lbl}]")
         try:
-            template_pattern = template_raw.format(num=num_val)
+            template_pattern = template_pattern.format(num=num_val)
         except Exception:
-            template_pattern = template_raw
+            pass
 
         # Smart Subfolder Routing
         target_dir = task.save_dir
@@ -1271,7 +1356,8 @@ class DownloadManager:
                     if not final_path or not os.path.exists(final_path):
                         prepared = ydl.prepare_filename(res_info)
                         base, _ = os.path.splitext(prepared)
-                        for ext in [".mp4", ".mkv", ".mp3", ".m4a", ".webm", ".wav"]:
+                        exts = [f".{task.audio_format.lower()}", ".mp3", ".m4a", ".wav", ".mp4", ".mkv", ".webm"] if task.mode == "audio" else [".mp4", ".mkv", ".webm", ".mp3", ".m4a"]
+                        for ext in exts:
                             if os.path.exists(base + ext):
                                 final_path = base + ext
                                 break
@@ -1397,14 +1483,23 @@ class DownloadManager:
             else:
                 raise RuntimeError("Could not find direct download stream for TikTok.")
 
-            clean_t = sanitize_filename(task.title)[:60].strip() or f"TikTok_{task.task_id[:8]}"
             out_ext = task.audio_format.lower() if is_audio_mode else "mp4"
-            out_filename = f"{clean_t}.{out_ext}"
+            v_id = task.extra_info.get("id") or (t_data.get("id") if "t_data" in locals() and isinstance(t_data, dict) else "") or task.task_id[:8]
+            out_filename = format_custom_filename(
+                naming_template=task.naming_template,
+                title=task.title,
+                video_id=v_id,
+                uploader=creator,
+                platform="tiktok",
+                ext=out_ext,
+                order_num=getattr(task, "order_num", 1) or 1
+            )
             out_filepath = os.path.join(target_dir, out_filename)
 
             counter = 1
+            name_stem, name_ext = os.path.splitext(out_filename)
             while os.path.exists(out_filepath):
-                out_filepath = os.path.join(target_dir, f"{clean_t}_{counter}.{out_ext}")
+                out_filepath = os.path.join(target_dir, f"{name_stem}_{counter}{name_ext}")
                 counter += 1
 
             task.target_filepath = out_filepath
@@ -1581,13 +1676,22 @@ class DownloadManager:
                 target_dir = os.path.join(target_dir, "Pinterest", sanitize_filename(creator))
             os.makedirs(target_dir, exist_ok=True)
 
-            clean_t = sanitize_filename(task.title)[:60].strip() or f"Pinterest_{task.task_id[:8]}"
-            out_filename = f"{clean_t}.{ext}"
+            v_id = task.extra_info.get("id") or (p_data.get("id") if "p_data" in locals() and isinstance(p_data, dict) else "") or task.task_id[:8]
+            out_filename = format_custom_filename(
+                naming_template=task.naming_template,
+                title=task.title,
+                video_id=v_id,
+                uploader=creator,
+                platform="pinterest",
+                ext=ext,
+                order_num=getattr(task, "order_num", 1) or 1
+            )
             out_filepath = os.path.join(target_dir, out_filename)
 
             counter = 1
+            name_stem, name_ext = os.path.splitext(out_filename)
             while os.path.exists(out_filepath):
-                out_filepath = os.path.join(target_dir, f"{clean_t}_{counter}.{ext}")
+                out_filepath = os.path.join(target_dir, f"{name_stem}_{counter}{name_ext}")
                 counter += 1
 
             task.target_filepath = out_filepath
@@ -1739,11 +1843,23 @@ class DownloadManager:
             desired_fmt = (task.image_format or config.get("image_format", "original")).lower()
             out_ext = "jpg" if desired_fmt in ["jpg", "jpeg"] else ("png" if desired_fmt == "png" else ("webp" if desired_fmt == "webp" else "jpg"))
 
-            out_filename = f"{clean_t}.{out_ext}"
+            v_id = task.extra_info.get("id") or task.task_id[:8]
+            creator = task.extra_info.get("uploader", "") or get_platform_label(task.platform)
+            out_filename = format_custom_filename(
+                naming_template=task.naming_template,
+                title=task.title,
+                video_id=v_id,
+                uploader=creator,
+                platform=task.platform,
+                ext=out_ext,
+                order_num=getattr(task, "order_num", 1) or 1
+            )
             out_filepath = os.path.join(target_dir, out_filename)
+
             counter = 1
+            name_stem, name_ext = os.path.splitext(out_filename)
             while os.path.exists(out_filepath):
-                out_filepath = os.path.join(target_dir, f"{clean_t}_{counter}.{out_ext}")
+                out_filepath = os.path.join(target_dir, f"{name_stem}_{counter}{name_ext}")
                 counter += 1
 
             task.target_filepath = out_filepath

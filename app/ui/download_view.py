@@ -718,7 +718,13 @@ class DownloadView(ctk.CTkFrame):
     def on_clear_video(self):
         self.current_video_info = None
         self._safe_reset_thumbnail("No Preview")
-        self.url_entry.delete(0, "end")
+        try:
+            self.url_entry.configure(state="normal")
+            self.url_entry.delete(0, "end")
+            self.url_entry.focus()
+        except Exception:
+            pass
+        self.fetch_btn.configure(state="normal", text="🔍 Analyze")
         self.status_label.configure(text="")
         self.trim_var.set(False)
         self.trim_inputs_frame.pack_forget()
@@ -764,6 +770,10 @@ class DownloadView(ctk.CTkFrame):
         try:
             clipboard = self.clipboard_get().strip()
             if clipboard:
+                try:
+                    self.url_entry.configure(state="normal")
+                except Exception:
+                    pass
                 self.url_entry.delete(0, "end")
                 self.url_entry.insert(0, clipboard)
                 self.on_fetch_clicked()
@@ -803,6 +813,7 @@ class DownloadView(ctk.CTkFrame):
         try:
             self.current_video_info = info
             self.fetch_btn.configure(state="normal", text="🔍 Analyze")
+            self.url_entry.configure(state="normal")
             ready_msg = "✔ Video ready for download!" if is_pro_active() else "✔ Video ready for download! (Free Edition capped at 720p HD)"
             self.status_label.configure(text=ready_msg, text_color="#10B981")
 
@@ -1000,6 +1011,13 @@ class DownloadView(ctk.CTkFrame):
             text="🚀 Download started! Added to Queue.",
             text_color="#10B981"
         )
+
+        try:
+            next_num = order_num + 1
+            self.order_num_entry.delete(0, "end")
+            self.order_num_entry.insert(0, str(next_num))
+        except Exception:
+            pass
 
         if self.on_download_started:
             self.on_download_started(task)
