@@ -1315,7 +1315,12 @@ class DownloadManager:
             # 1. Check if already downloaded in history or save folder (Duplicate Auto-Skip)
             if task.skip_existing and config.get("skip_existing_files", True):
                 for h in config.history:
-                    if h.get("url") == task.url and h.get("filepath") and os.path.exists(h["filepath"]):
+                    if (
+                        h.get("url") == task.url
+                        and h.get("mode", "video") == task.mode
+                        and h.get("filepath")
+                        and os.path.exists(h["filepath"])
+                    ):
                         task.target_filepath = h["filepath"]
                         if h.get("title") and task.title in ["", "Loading metadata..."]:
                             task.title = h["title"]
